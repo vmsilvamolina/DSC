@@ -1,0 +1,15 @@
+Configuration EnableIIS
+{
+    Node “WebSvr001"
+    {
+        WindowsFeature WebServer
+        {
+            Name = "Web-Server"
+            Ensure = "Present"
+        }
+    }
+}
+
+EnableIIS
+
+Start-DSCConfiguration -Path .\EnableIIS -Verbose -Wait -Force
