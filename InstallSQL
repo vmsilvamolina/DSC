@@ -1,0 +1,128 @@
+# A configuration to install a default SQL instance
+Configuration InstallSQL
+{
+    param (
+        [Parameter(Mandatory=$true)]
+        [pscredential]
+        $NetworkCredentials,
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $ISOPath,
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $CDKey
+    )
+  
+    Import-DscResource -ModuleName 'PSDesiredStateConfiguration'
+  
+    Node $AllNodes.NodeName
+    {
+
+        WindowsFeature NetFramework35Core
+        {
+            Name = "NET-Framework-Core"
+            Ensure = "Present"
+        }
+  
+        WindowsFeature NetFramework45Core
+        {
+            Name = "NET-Framework-45-Core"
+            Ensure = "Present"
+        }
+  
+        File SQLServerISO
+        {
+            Credential=$NetworkCredentials
+            SourcePath = "$ISOPath"
+            DestinationPath = "C:\SQL\SQLServer.iso"
+            Type = "File"
+            Ensure = "Present"
+        }
+  
+        # create sqlserver configuration ini file
+        File SQLConfigurationFile
+        {
+            DestinationPath = 'C:\SQL\ConfigurationFile.ini'
+            Contents = '
+                [OPTIONS]
+                PID=' + $CDKey + '
+                IACCEPTSQLSERVERLICENSETERMS="True"
+                ACTION="Install"
+                ENU="True"
+                QUIET="True"
+                UpdateEnabled="False"
+                FEATURES=SQLENGINE,CONN,SSMS
+                UpdateSource="MU"
+                HELP="False"
+                INDICATEPROGRESS="False"
+                X86="False"
+                INSTALLSHAREDDIR="C:\Program Files\Microsoft SQL Server"
+                INSTALLSHAREDWOWDIR="C:\Program Files (x86)\Microsoft SQL Server"
+                INSTANCENAME="MSSQLSERVER"
+                INSTANCEID="MSSQLSERVER"
+                SQMREPORTING="False"
+                ERRORREPORTING="False"
+                INSTANCEDIR="C:\Program Files\Microsoft SQL Server"
+                AGTSVCACCOUNT="NT AUTHORITY\SYSTEM"
+                AGTSVCSTARTUPTYPE="Manual"
+                COMMFABRICPORT="0"
+                COMMFABRICNETWORKLEVEL="0"
+                COMMFABRICENCRYPTION="0"
+                MATRIXCMBRICKCOMMPORT="0"
+                SQLSVCSTARTUPTYPE="Automatic"
+                FILESTREAMLEVEL="0"
+                ENABLERANU="False"
+                SQLCOLLATION="Latin1_General_CI_AS"
+                SQLSVCACCOUNT="NT AUTHORITY\SYSTEM"
+                SQLSYSADMINACCOUNTS="DEVELOPMENT\Administrator"
+                ADDCURRENTUSERASSQLADMIN="False"
+                TCPENABLED="1"
+                NPENABLED="0"
+                BROWSERSVCSTARTUPTYPE="Disabled"'
+        }
+ 
+        Script InstallSQLServer
+        {
+            GetScript =
+            {
+                $sqlInstances = gwmi win32_service -computerName localhost | ? { $_.Name -match "mssql*" -and $_.PathName -match "sqlservr.exe" } | % { $_.Caption }
+                $res = $sqlInstances -ne $null -and $sqlInstances -gt 0
+                $vals = @{
+                    Installed = $res;
+                    InstanceCount = $sqlInstances.count
+                }
+                $vals
+            }
+            SetScript =
+            {
+                # mount the iso
+                $setupDriveLetter = (Mount-DiskImage -ImagePath C:\InstallSQL\SQLServer.iso -PassThru | Get-Volume).DriveLetter + ":"
+                if ($setupDriveLetter -eq $null) {
+                    throw "Could not mount SQL install iso"
+                }
+                Write-Verbose "Drive letter for iso is: $setupDriveLetter"
+                  
+                # run the installer using the ini file
+                $cmd = "$setupDriveLetter\Setup.exe /ConfigurationFile=C:\SQL\ConfigurationFile.ini"
+                Write-Verbose "Running SQL Install - check %programfiles%\Microsoft SQL Server\120\Setup Bootstrap\Log\ for logs..."
+                Invoke-Expression $cmd | Write-Verbose
+ 
+                # dismount the iso
+                Dismount-DiskImage -ImagePath C:\InstallSQL\SQLServer.iso
+            }
+            TestScript =
+            {
+                $sqlInstances = gwmi win32_service -computerName localhost | ? { $_.Name -match "mssql*" -and $_.PathName -match "sqlservr.exe" } | % { $_.Caption }
+                $res = $sqlInstances -ne $null -and $sqlInstances -gt 0
+                if ($res) {
+                    Write-Verbose "SQL Server is already installed"
+                } else {
+                    Write-Verbose "SQL Server is not installed"
+                }
+                $res
+            }
+        }
+    }
+}
