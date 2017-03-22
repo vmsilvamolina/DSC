@@ -1,0 +1,122 @@
+#Safe Mode Password
+$pass = ConvertTo-SecureString 'Ch4ngeW1thAS3curePassw0rd!' -AsPlainText -Force
+$safeModePW = New-Object System.Management.Automation.PSCredential ('guest', $pass)
+#Local user Password
+$pass = ConvertTo-SecureString 'TheS3cureP4ss' -AsPlainText -Force
+$localUser = New-Object System.Management.Automation.PSCredential ('guest', $pass)
+
+configuration DomainLab
+{
+     param
+    (
+        [string[]]$NodeName ='localhost',
+        [Parameter(Mandatory)][string]$ServerName,
+        $DomainAdmin,
+        [Parameter(Mandatory)][string]$DomainName,
+        [Parameter()][string]$UserName,
+        [Parameter()]$SafeModePW,
+        [Parameter()]$Password
+    ) 
+ 
+    #Import the required DSC Resources
+    Import-DscResource -Module xActiveDirectory
+    Import-DscResource -Module xNetworking
+    Import-DscResource -module xDHCpServer
+    Import-DscResource -Module xComputerManagement 
+ 
+    Node $NodeName
+    { #ConfigurationBlock 
+ 
+        xComputer NewNameAndWorkgroup
+            {
+                Name          = $ServerName
+ 
+            }
+ 
+        WindowsFeature ADDSInstall
+        { 
+ 
+            Ensure = 'Present'
+            Name = 'AD-Domain-Services'
+            IncludeAllSubFeature = $true
+        }
+ 
+        WindowsFeature RSATTools
+        {
+            DependsOn= '[WindowsFeature]ADDSInstall'
+            Ensure = 'Present'
+            Name = 'RSAT-AD-Tools'
+            IncludeAllSubFeature = $true
+        }
+ 
+        xIPAddress NewIPAddress
+        {
+            IPAddress      = "10.20.10.1"
+            InterfaceAlias = "Ethernet"
+            SubnetMask     = 24
+            AddressFamily  = "IPV4"
+ 
+        }
+ 
+        WindowsFeature DHCP {
+            DependsOn = '[xIPAddress]NewIpAddress'
+            Name = 'DHCP'
+            Ensure = 'PRESENT'
+            IncludeAllSubFeature = $true                                                                                                                              
+ 
+        }  
+ 
+        WindowsFeature DHCPTools
+        {
+            DependsOn= '[WindowsFeature]DHCP'
+            Ensure = 'Present'
+            Name = 'RSAT-DHCP'
+            IncludeAllSubFeature = $true
+        }  
+ 
+        xADDomain SetupDomain {
+            DomainAdministratorCredential = $DomainAdmin
+            DomainName = $DomainName
+            SafemodeAdministratorPassword = $SafeModePW
+            DependsOn = '[WindowsFeature]RSATTools'
+            DomainNetbiosName = $DomainName.Split('.')[0]
+        }
+ 
+        xDhcpServerScope Scope
+        {
+         DependsOn = '[WindowsFeature]DHCP'
+         Ensure = 'Present'
+         IPEndRange = '10.20.10.200'
+         IPStartRange = '10.20.10.10'
+         Name = 'DHCPScope'
+         SubnetMask = '255.255.255.0'
+         LeaseDuration = '00:08:00'
+         State = 'Active'
+         AddressFamily = 'IPv4'
+        } 
+ 
+        xDhcpServerOption Option
+     {
+         Ensure = 'Present'
+         ScopeID = '10.20.10.0'
+         DnsDomain = $DomainName
+         DnsServerIPAddress = '10.20.10.1'
+         AddressFamily = 'IPv4'
+     }
+ 
+    #End Configuration Block
+    }
+}
+ 
+$configData = @{
+                AllNodes = @(
+                              @{
+                                 NodeName = 'localhost';
+                                 PSDscAllowPlainTextPassword = $true
+                                    }
+                    )
+               }
+ 
+DomainLab -ServerName SRV-DC-01 -DomainName dominio.local -Password $localUser -UserName 'FoxDeploy' -SafeModePW $SafeModePW -ConfigurationData $configData
+ 
+Start-DscConfiguration -ComputerName localhost -Wait -Force -Verbose -path .\DomainLab -Debug
